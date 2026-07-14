@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Swap with Lia — Cross-Chain DEX & AI Swap</title>
+  <meta name="description" content="Swap with Lia is a cross-chain DEX powered by AI. Trade ETH, WETH, and RITUAL across Ethereum Sepolia, Base Sepolia, and Ritual chain.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <!-- Custom-dropdown + polish overrides (loaded after style.css) -->
+  <style>
+    /* Custom chain dropdown */
+    .chain-dd { position: relative; }
+    .chain-dd-trigger {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px 6px 12px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-full);
+      color: var(--text-primary);
+      font-family: var(--font-primary);
+      font-size: 0.78rem; font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      white-space: nowrap;
+    }
+    .chain-dd-trigger:hover { border-color: var(--border-active); background: var(--bg-input-hover); }
+    .chain-dd.open .chain-dd-trigger { border-color: var(--accent-purple); }
+    .chain-dd-caret { color: var(--text-muted); transition: transform var(--transition-fast); }
+    .chain-dd.open .chain-dd-caret { transform: rotate(180deg); }
+
+    .chain-dd-menu {
+      position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+      min-width: 190px; padding: 6px;
+      background: var(--bg-secondary, #14121c);
+      border: 1px solid var(--border-active, rgba(255,255,255,0.12));
+      border-radius: var(--radius-lg);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+      display: none; flex-direction: column; gap: 2px;
+      backdrop-filter: blur(20px);
+    }
+    .chain-dd.open .chain-dd-menu { display: flex; animation: ddIn .14s ease; }
+    @keyframes ddIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+    .chain-dd-option {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border: none; background: transparent;
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      font-family: var(--font-primary); font-size: 0.82rem; font-weight: 500;
+      cursor: pointer; text-align: left; width: 100%;
+      transition: all var(--transition-fast);
+    }
+    .chain-dd-option:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+    .chain-dd-option.selected { background: rgba(167,139,250,0.12); color: var(--accent-purple); }
+    .chain-dd-option[disabled] { opacity: 0.35; cursor: not-allowed; }
+    .chain-dd-option .chain-dot { width: 9px; height: 9px; flex: 0 0 auto; }
+    .chain-dd-check { margin-left: auto; opacity: 0; color: var(--accent-purple); }
+    .chain-dd-option.selected .chain-dd-check { opacity: 1; }
+
+    /* Make the wallet balance readable (was too dim to notice) */
+    .balance-label { color: var(--text-secondary); font-weight: 500; }
+    .balance-label .bal-amt { color: var(--text-primary); font-weight: 600; }
+
+    /* Transaction history */
+    .history-list { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow-y: auto; }
+    .history-empty { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 28px 12px; }
+    .history-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px; background: var(--bg-input);
+      border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    }
+    .history-icon {
+      width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(167,139,250,0.12); font-size: 1rem;
+    }
+    .history-main { flex: 1; min-width: 0; }
+    .history-type { font-weight: 600; font-size: 0.86rem; color: var(--text-primary); }
+    .history-sub { font-size: 0.74rem; color: var(--text-muted); margin-top: 2px; }
+    .history-right { text-align: right; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+    .history-status {
+      font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+      padding: 2px 8px; border-radius: var(--radius-full);
+    }
+    .history-status.submitted { color: #fbbf24; background: rgba(251,191,36,0.12); }
+    .history-status.confirmed { color: var(--ritual-color, #6ee7b7); background: rgba(110,231,183,0.12); }
+    .history-status.failed    { color: #f87171; background: rgba(248,113,113,0.12); }
+    .history-status.pending   { color: #a78bfa; background: rgba(167,139,250,0.14); }
+    .history-link { font-size: 0.72rem; color: var(--accent-purple); text-decoration: none; }
+    .history-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <!-- Canvas Background -->
+  <canvas id="bg-canvas"></canvas>
+
+  <!-- Main UI Layer -->
+  <div id="app">
+
+    <!-- Header -->
+    <header id="site-header">
+      <div class="header-inner">
+        <a href="/" class="logo">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="14" cy="14" r="13" stroke="url(#logo-grad)" stroke-width="2"/>
+            <path d="M9 14L12.5 10L14 12L17.5 8" stroke="url(#logo-grad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M9 18L12.5 14L14 16L17.5 12" stroke="url(#logo-grad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="28" y2="28">
+                <stop offset="0%" stop-color="#a78bfa"/>
+                <stop offset="100%" stop-color="#6ee7b7"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span class="logo-text">Swap<span class="logo-accent"> with Lia</span></span>
+        </a>
+        <nav class="header-nav">
+          <a href="#" class="nav-link active" data-tab="dex">DEX</a>
+          <a href="#" class="nav-link" data-tab="ai">Lia Swap</a>
+          <a href="#" class="nav-link" data-tab="pool">Pool</a>
+          <a href="#" class="nav-link" data-tab="history">History</a>
+        </nav>
+        <button id="connect-wallet" class="btn btn-connect">
+          <span class="btn-dot"></span>
+          <span class="btn-text">Connect Wallet</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main id="main-content">
+
+      <!-- DEX Tab -->
+      <section id="tab-dex" class="tab-panel active">
+        <div class="swap-card glass">
+          <div class="card-header">
+            <h2 class="card-title">Bridge & Swap</h2>
+            <button class="settings-btn" id="settings-toggle" title="Settings">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- FROM: Chain + Token + Amount -->
+          <div class="token-input-group">
+            <div class="field-row">
+              <label class="field-label">From</label>
+              <div class="chain-dd" id="from-chain-dd" data-value="11155111">
+                <button class="chain-dd-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="chain-dot eth"></span>
+                  <span class="chain-dd-label">Ethereum Sepolia</span>
+                  <svg class="chain-dd-caret" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+                </button>
+                <div class="chain-dd-menu" role="listbox"></div>
+              </div>
+            </div>
+            <div class="token-input">
+              <button class="token-select" id="from-token-btn">
+                <span class="token-icon">Ξ</span>
+                <span class="token-name" id="from-token-name">ETH</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+              <input type="text" class="amount-input" id="from-amount" placeholder="0.0" autocomplete="off">
+            </div>
+            <div class="token-meta">
+              <span class="balance-label" id="from-balance">Balance: —</span>
+              <button class="max-btn" id="from-max">MAX</button>
+            </div>
+          </div>
+
+          <!-- Swap Direction Arrow -->
+          <div class="swap-direction">
+            <button class="swap-arrow-btn" id="swap-direction-btn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- TO: Chain + Token + Amount -->
+          <div class="token-input-group">
+            <div class="field-row">
+              <label class="field-label">To</label>
+              <div class="chain-dd" id="to-chain-dd" data-value="1979">
+                <button class="chain-dd-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="chain-dot ritual"></span>
+                  <span class="chain-dd-label">Ritual Chain</span>
+                  <svg class="chain-dd-caret" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+                </button>
+                <div class="chain-dd-menu" role="listbox"></div>
+              </div>
+            </div>
+            <div class="token-input">
+              <button class="token-select" id="to-token-btn">
+                <span class="token-icon">◈</span>
+                <span class="token-name" id="to-token-name">RITUAL</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+              <input type="text" class="amount-input" id="to-amount" placeholder="0.0" readonly>
+            </div>
+            <div class="token-meta">
+              <span class="balance-label" id="to-balance">Balance: —</span>
+            </div>
+          </div>
+
+          <!-- Route Info -->
+          <div class="price-info" id="price-info" style="display:none">
+            <div class="price-row">
+              <span>Route</span>
+              <span id="route-info">—</span>
+            </div>
+            <div class="price-row">
+              <span>Rate</span>
+              <span id="exchange-rate">—</span>
+            </div>
+            <div class="price-row">
+              <span>Estimated Time</span>
+              <span id="est-time" class="text-green">—</span>
+            </div>
+          </div>
+
+          <!-- Action Button -->
+          <button class="btn btn-swap" id="swap-btn" disabled>
+            <span>Enter an amount</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- AI Tab -->
+      <section id="tab-ai" class="tab-panel">
+        <div class="ai-card glass">
+          <div class="card-header">
+            <h2 class="card-title">
+              <span class="ai-sparkle">✦</span> lia swap
+            </h2>
+          </div>
+          <div class="ai-chat" id="ai-chat">
+            <div class="ai-message assistant">
+              <div class="ai-avatar">
+                <span>✦</span>
+              </div>
+              <div class="ai-bubble">
+                <p>Hi! I'm <strong>Lia</strong>, your AI swap assistant. I can help you:</p>
+                <ul>
+                  <li>Bridge ETH from Ethereum or Base to Ritual</li>
+                  <li>Swap WETH ↔ RITUAL on the DEX</li>
+                  <li>Find the best route for cross-chain swaps</li>
+                  <li>Check your balances across all chains</li>
+                </ul>
+                <p>Just tell me what you'd like to do! For example: <em>"Bridge 0.1 ETH from Base to Ritual"</em></p>
+              </div>
+            </div>
+          </div>
+          <div class="ai-input-wrapper">
+            <div class="ai-input-container">
+              <input type="text" class="ai-input" id="ai-input" placeholder="Tell Lia what you want to swap..." autocomplete="off">
+              <button class="ai-send-btn" id="ai-send">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pool Tab -->
+      <section id="tab-pool" class="tab-panel">
+        <div class="pool-card glass">
+          <div class="card-header">
+            <h2 class="card-title">Liquidity Pool</h2>
+            <div class="pool-toggle">
+              <button class="pool-tab-btn active" data-pool-tab="add" id="pool-add-tab">Add</button>
+              <button class="pool-tab-btn" data-pool-tab="remove" id="pool-remove-tab">Remove</button>
+            </div>
+          </div>
+
+          <!-- Pool Stats -->
+          <div class="pool-stats">
+            <div class="pool-stat">
+              <span class="pool-stat-label">WETH Reserve</span>
+              <span class="pool-stat-value" id="pool-weth">—</span>
+            </div>
+            <div class="pool-stat">
+              <span class="pool-stat-label">WRITUAL Reserve</span>
+              <span class="pool-stat-value" id="pool-writual">—</span>
+            </div>
+            <div class="pool-stat">
+              <span class="pool-stat-label">Exchange Rate</span>
+              <span class="pool-stat-value" id="pool-rate">—</span>
+            </div>
+            <div class="pool-stat">
+              <span class="pool-stat-label">Total LP Supply</span>
+              <span class="pool-stat-value" id="pool-lp">—</span>
+            </div>
+          </div>
+
+          <!-- Your Position -->
+          <div class="your-position" id="your-position" style="display:none">
+            <div class="position-header">Your Position</div>
+            <div class="pool-stats">
+              <div class="pool-stat">
+                <span class="pool-stat-label">LP Tokens</span>
+                <span class="pool-stat-value" id="your-lp">0</span>
+              </div>
+              <div class="pool-stat">
+                <span class="pool-stat-label">Pool Share</span>
+                <span class="pool-stat-value" id="your-share">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Add Liquidity Form -->
+          <div class="pool-form" id="pool-add-form">
+            <div class="token-input-group">
+              <div class="field-row">
+                <label class="field-label">WETH Amount</label>
+                <span class="balance-label" id="pool-weth-balance">Balance: —</span>
+              </div>
+              <div class="token-input">
+                <div class="token-badge"><span class="token-icon">Ξ</span> WETH</div>
+                <input type="text" class="amount-input" id="pool-weth-input" placeholder="0.0" autocomplete="off">
+              </div>
+            </div>
+            <div class="swap-direction"><span style="font-size:1.2rem;color:var(--text-muted)">+</span></div>
+            <div class="token-input-group">
+              <div class="field-row">
+                <label class="field-label">RITUAL Amount</label>
+                <span class="balance-label" id="pool-ritual-balance">Balance: —</span>
+              </div>
+              <div class="token-input">
+                <div class="token-badge"><span class="token-icon">◈</span> RITUAL</div>
+                <input type="text" class="amount-input" id="pool-ritual-input" placeholder="0.0" autocomplete="off">
+              </div>
+            </div>
+            <button class="btn btn-swap" id="add-liquidity-btn">Add Liquidity</button>
+          </div>
+
+          <!-- Remove Liquidity Form -->
+          <div class="pool-form" id="pool-remove-form" style="display:none">
+            <div class="token-input-group">
+              <div class="field-row">
+                <label class="field-label">LP Tokens to Burn</label>
+                <span class="balance-label" id="pool-lp-balance">Balance: —</span>
+              </div>
+              <div class="token-input">
+                <div class="token-badge"><span class="token-icon">⟡</span> RSLP</div>
+                <input type="text" class="amount-input" id="pool-lp-input" placeholder="0.0" autocomplete="off">
+              </div>
+            </div>
+            <div class="price-info" style="display:block;margin-top:12px">
+              <div class="price-row">
+                <span>You Receive (est.)</span>
+                <span id="remove-estimate">— WETH + — RITUAL</span>
+              </div>
+            </div>
+            <button class="btn btn-swap" id="remove-liquidity-btn">Remove Liquidity</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- History Tab -->
+      <section id="tab-history" class="tab-panel">
+        <div class="pool-card glass">
+          <div class="card-header">
+            <h2 class="card-title">Transaction History</h2>
+            <button class="pool-tab-btn" id="history-clear">Clear</button>
+          </div>
+          <div id="history-list" class="history-list">
+            <div class="history-empty">No transactions yet. Your swaps, bridges and liquidity actions will show up here.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer id="site-footer">
+      <div class="footer-inner">
+        <span class="footer-brand">Swap with Lia</span>
+        <div class="footer-links">
+          <span class="footer-chain-status">
+            <span class="status-dot live"></span>
+            Ritual Chain
+          </span>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Token Select Modal -->
+  <div class="modal-overlay" id="token-modal" style="display:none">
+    <div class="modal glass">
+      <div class="modal-header">
+        <h3>Select Token</h3>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="token-list">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

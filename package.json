@@ -1,0 +1,23 @@
+{
+  "name": "ritual-swap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hybrid DEX + AI Intent Swap Platform for Base Sepolia, Ethereum Sepolia, and Ritual",
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:config": "cd packages/config && npm run build",
+    "build:ai-agent": "cd packages/ai-agent && npm run build",
+    "build:relayer": "cd services/relayer && npm run build",
+    "dev:relayer": "cd services/relayer && npm run dev",
+    "test:contracts": "cd contracts && forge test -vvv",
+    "test:relayer": "cd services/relayer && npm test",
+    "coverage:contracts": "cd contracts && forge coverage"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

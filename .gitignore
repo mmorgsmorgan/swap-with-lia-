@@ -1,0 +1,29 @@
+# deps / builds
+node_modules/
+dist/
+dist-verify/
+.turbo/
+*.tsbuildinfo
+
+# secrets — NEVER commit (.env holds private keys / API keys)
+.env
+.env.*
+!.env.example
+*.key
+
+# foundry artifacts
+cache/
+out/
+broadcast/
+
+# relayer local state
+relayer.db
+*.db
+*.db-shm
+*.db-wal
+
+# logs / misc
+*.log
+._*
+.DS_Store
+contracts/lib/

@@ -1,0 +1,62 @@
+# Render Blueprint — creates both services when you connect this repo.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# 1) lia-relayer  — background worker (always-on; free web services spin down
+#    after idle, which would kill the bridge — worker plan is required).
+# 2) lia-frontend — static site (free).
+#
+# After clicking "Apply" you will be prompted for RELAYER_PRIVATE_KEY
+# (sync: false keeps it out of the repo — set it in the dashboard).
+
+services:
+  # ---------- Bridge relayer (always-on daemon) ----------
+  - type: worker
+    name: lia-relayer
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build:config && npm run build:relayer
+    startCommand: node services/relayer/dist/index.js
+    autoDeploy: true
+    envVars:
+      - key: RELAYER_PRIVATE_KEY
+        sync: false # set in Render dashboard — never commit this
+      - key: ETHEREUM_SEPOLIA_RPC
+        value: https://ethereum-sepolia-rpc.publicnode.com
+      - key: BASE_SEPOLIA_RPC
+        value: https://sepolia.base.org
+      - key: RITUAL_RPC
+        value: https://rpc.ritualfoundation.org
+      - key: ETH_SEPOLIA_BRIDGE_LOCK
+        value: "0x04fC7cDa5178fd86a0BbB3F6bbc1A765e0a8Fc35"
+      - key: BASE_SEPOLIA_BRIDGE_LOCK
+        value: "0xa7376704830A1d71cF45Ff698564656E79bf6B61"
+      - key: RITUAL_BRIDGE_MINT
+        value: "0xC4b66348DfF821874C9B98aAb1775F8667EED7E9"
+      - key: RITUAL_CROSS_CHAIN_SWAP
+        value: "0xD05d9C7F68965Da382937f3F1760d13f69D887F3"
+      - key: RITUAL_SWAP_ROUTER
+        value: "0xf27b0c56452443F5306C5904100A0fde6F23577B"
+      - key: POLL_INTERVAL_MS
+        value: "5000"
+      - key: CONFIRMATIONS
+        value: "1"
+      - key: HEALTH_PORT
+        value: "3002"
+      - key: DB_PATH
+        value: ./relayer.db # ephemeral is OK — v2 contracts reject replays on-chain
+
+  # ---------- Frontend (static Vite build) ----------
+  - type: web
+    name: lia-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npx vite build
+    staticPublishPath: dist
+    autoDeploy: true
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    # Optional: set VITE_OPENROUTER_API_KEY here to enable the LLM brain.
+    # WARNING: Vite inlines it into the public JS bundle — anyone can read it.
+    # Without it, Lia falls back to the built-in local parser and still works.

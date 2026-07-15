@@ -998,6 +998,19 @@ function initHistory() {
   document.getElementById('history-clear')?.addEventListener('click', () => {
     if (confirm('Clear transaction history for this wallet?')) { saveTxs([]); renderHistory(); }
   });
+  // Rescue rows an older build mislabeled: 'unknown' used to be treated as
+  // permanently unverifiable, but for fresh txs it just meant RPC lag.
+  // Put recent ones back to 'pending' so the poller re-resolves them.
+  const txs = loadTxs();
+  let rescued = false;
+  for (const t of txs) {
+    if (t.status === 'failed' && t.note === 'Unverifiable (old bridge contract)' && Date.now() - t.ts < 24 * 60 * 60 * 1000) {
+      t.status = 'pending';
+      t.note = 'Awaiting relayer (~60s)';
+      rescued = true;
+    }
+  }
+  if (rescued) saveTxs(txs);
   renderHistory();
 }
 
@@ -1027,8 +1040,12 @@ async function resolvePendingTxs() {
         updateTxStatus(t.id, status, status === 'confirmed' ? 'Relayer completed' : 'Did not complete');
         anyResolved = true;
       } else if (status === 'unknown') {
-        // Not verifiable (e.g. tx against the old bridge contracts) — stop polling it.
-        updateTxStatus(t.id, 'failed', 'Unverifiable (old bridge contract)');
+        // 'unknown' right after submit just means the receipt isn't indexed yet
+        // (RPC lag) — keep polling. Only give up on entries that stayed
+        // unverifiable for 10+ minutes (e.g. txs against the old bridge contracts).
+        if (Date.now() - t.ts > 10 * 60 * 1000) {
+          updateTxStatus(t.id, 'failed', 'Unverifiable (old bridge contract)');
+        }
       }
     }
     if (anyResolved) loadAllBalances();

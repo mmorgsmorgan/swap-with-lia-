@@ -244,11 +244,71 @@ class BridgeRelayer {
       try {
         await this.handleUnlock(event);
       } catch (error) {
-        console.error(
-          `  ❌ Failed to unlock nonce=${event.nonce}:`,
-          error instanceof Error ? error.message : error
-        );
-        this.db.markFailed(ritualChainId, event.nonce, 'burn');
+        this.handleUnlockFailure(event, 0, error);
+      }
+    }
+
+    // Re-attempt unlocks that failed transiently (e.g. lock underfunded, RPC flake).
+    await this.processRetries();
+  }
+
+  // Unlocks fail transiently all the time — the big one is the BridgeLock being
+  // underfunded until someone tops it up. Schedule a retry with backoff instead
+  // of permanently marking failed; the user's escrowed WETH stays reclaimable
+  // after the 1h timeout either way, so retrying is always safe.
+  private static readonly MAX_UNLOCK_ATTEMPTS = 20;
+  private static readonly RETRY_BASE_DELAY_S = 30;
+
+  private handleUnlockFailure(event: BurnForUnlockEvent, attempts: number, error: unknown): void {
+    const ritualChainId = config.chains.ritual.chainId;
+    const msg = error instanceof Error ? error.message : String(error);
+    const nextAttempt = attempts + 1;
+
+    if (nextAttempt >= BridgeRelayer.MAX_UNLOCK_ATTEMPTS) {
+      console.error(`  ❌ Unlock nonce=${event.nonce} failed permanently after ${nextAttempt} attempts: ${msg}`);
+      this.db.markFailed(ritualChainId, event.nonce, 'burn');
+      return;
+    }
+
+    // Exponential backoff capped at 10 min: 30s, 60s, 120s, ... 600s
+    const delay = Math.min(BridgeRelayer.RETRY_BASE_DELAY_S * 2 ** attempts, 600);
+    const data = JSON.stringify({
+      sender: event.sender,
+      amount: event.amount.toString(),
+      destinationChainId: event.destinationChainId.toString(),
+      nonce: event.nonce.toString(),
+      txHash: event.txHash,
+      blockNumber: event.blockNumber.toString(),
+    });
+    this.db.markRetry(ritualChainId, event.nonce, 'burn', data, nextAttempt, delay);
+    console.error(`  🔁 Unlock nonce=${event.nonce} failed (attempt ${nextAttempt}/${BridgeRelayer.MAX_UNLOCK_ATTEMPTS}), retrying in ${delay}s: ${msg}`);
+  }
+
+  private async processRetries(): Promise<void> {
+    const due = this.db.getDueRetries('burn');
+    for (const row of due) {
+      let event: BurnForUnlockEvent;
+      try {
+        const d = JSON.parse(row.event_data);
+        event = {
+          sender: d.sender,
+          amount: BigInt(d.amount),
+          destinationChainId: BigInt(d.destinationChainId),
+          nonce: BigInt(d.nonce),
+          txHash: d.txHash,
+          blockNumber: BigInt(d.blockNumber),
+        };
+      } catch {
+        console.error(`  ❌ Corrupt retry payload for nonce=${row.nonce}, marking failed`);
+        this.db.markFailed(row.source_chain_id, BigInt(row.nonce), 'burn');
+        continue;
+      }
+
+      console.log(`\n🔁 Retrying unlock nonce=${event.nonce} (attempt ${row.attempts + 1}/${BridgeRelayer.MAX_UNLOCK_ATTEMPTS})`);
+      try {
+        await this.handleUnlock(event);
+      } catch (error) {
+        this.handleUnlockFailure(event, row.attempts, error);
       }
     }
   }
@@ -326,8 +386,8 @@ class BridgeRelayer {
 
       this.db.markCompleted(config.chains.ritual.chainId, event.nonce, 'burn', txHash);
     } else {
-      console.error(`  ❌ Unlock tx reverted: ${txHash}`);
-      this.db.markFailed(config.chains.ritual.chainId, event.nonce, 'burn');
+      // Throw so the caller schedules a retry instead of permanently failing.
+      throw new Error(`Unlock tx reverted: ${txHash}`);
     }
   }
 

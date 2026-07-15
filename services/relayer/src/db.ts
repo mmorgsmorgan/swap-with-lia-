@@ -68,6 +68,11 @@ export class NonceDB {
         PRIMARY KEY(chain_id, event_type)
       );
     `);
+    // Retry support (added later — ALTER is a no-op if columns already exist)
+    const cols = (this.db.pragma('table_info(processed_events)') as { name: string }[]).map((c) => c.name);
+    if (!cols.includes('event_data')) this.db.exec('ALTER TABLE processed_events ADD COLUMN event_data TEXT');
+    if (!cols.includes('attempts')) this.db.exec('ALTER TABLE processed_events ADD COLUMN attempts INTEGER DEFAULT 0');
+    if (!cols.includes('next_retry_at')) this.db.exec('ALTER TABLE processed_events ADD COLUMN next_retry_at INTEGER');
   }
 
   isProcessed(sourceChainId: number, nonce: bigint, eventType: string): boolean {
@@ -84,6 +89,22 @@ export class NonceDB {
 
   markFailed(sourceChainId: number, nonce: bigint, eventType: string): void {
     this.stmts.updateStatus.run('failed', sourceChainId, nonce.toString(), eventType);
+  }
+
+  // Schedule a retry: keep the serialized event so the attempt survives restarts.
+  markRetry(sourceChainId: number, nonce: bigint, eventType: string, eventData: string, attempts: number, delaySeconds: number): void {
+    this.db.prepare(
+      `UPDATE processed_events
+       SET status = 'retry', event_data = ?, attempts = ?, next_retry_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE source_chain_id = ? AND nonce = ? AND event_type = ?`
+    ).run(eventData, attempts, Math.floor(Date.now() / 1000) + delaySeconds, sourceChainId, nonce.toString(), eventType);
+  }
+
+  getDueRetries(eventType: string): { source_chain_id: number; nonce: string; event_data: string; attempts: number }[] {
+    return this.db.prepare(
+      `SELECT source_chain_id, nonce, event_data, attempts FROM processed_events
+       WHERE status = 'retry' AND event_type = ? AND event_data IS NOT NULL AND next_retry_at <= ?`
+    ).all(eventType, Math.floor(Date.now() / 1000)) as { source_chain_id: number; nonce: string; event_data: string; attempts: number }[];
   }
 
   getStatus(sourceChainId: number, nonce: bigint, eventType: string): string | null {

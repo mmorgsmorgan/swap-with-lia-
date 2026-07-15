@@ -882,6 +882,7 @@ body {
 .footer-inner {
   max-width: 1200px;
   margin: 0 auto;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -892,6 +893,20 @@ body {
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-muted);
+}
+
+/* Centered between brand and chain status; absolute so the flex
+   space-between of the outer items is unaffected. */
+.footer-credit {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  opacity: 0.45;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .footer-chain-status {

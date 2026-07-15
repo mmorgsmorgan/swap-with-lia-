@@ -177,14 +177,19 @@ const appKit = createAppKit({
   features: { analytics: false, email: false, socials: false },
 });
 
-// The active EIP-1193 provider — injected OR WalletConnect, whichever the user
-// picked in the AppKit modal. All wallet clients are built from this.
+// The active EIP-1193 provider. Two paths:
+//  - Desktop with an extension: window.ethereum directly (fast, reliable).
+//  - No injected wallet (mobile browsers): AppKit's WalletConnect provider.
 let activeProvider = null;
+let usingInjected = false;
 appKit.subscribeProviders((state) => {
-  activeProvider = state['eip155'] || null;
+  // Only adopt the AppKit provider when we're not on the injected path,
+  // so a lingering WC session can't hijack a desktop extension connection.
+  if (!usingInjected) activeProvider = state['eip155'] || null;
 });
 
 function provider() {
+  if (usingInjected) return window.ethereum;
   return activeProvider || window.ethereum || null;
 }
 
@@ -193,27 +198,47 @@ export function setAccountChangeHandler(fn) {
   onAccountChange = fn;
 }
 
-appKit.subscribeAccount((acc) => {
-  const next = acc?.isConnected ? (acc.address || null) : null;
+function emitAccount(next) {
   if (next !== account) {
     account = next;
     onAccountChange?.(account);
   }
+}
+
+// AppKit account events only drive state on the WalletConnect path.
+appKit.subscribeAccount((acc) => {
+  if (usingInjected) return;
+  emitAccount(acc?.isConnected ? (acc.address || null) : null);
 });
 
-export async function connectWallet() {
-  // Already connected (e.g. session restored from a previous visit)?
+// Injected account events drive state on the extension path.
+if (window.ethereum?.on) {
+  window.ethereum.on('accountsChanged', (accounts) => {
+    if (!usingInjected) return;
+    emitAccount(accounts?.[0] || null);
+  });
+}
+
+async function connectInjected() {
+  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  if (!accounts?.length) return null;
+  usingInjected = true;
+  activeProvider = window.ethereum;
+  emitAccount(accounts[0]);
+  return account;
+}
+
+async function connectViaAppKit() {
   const existing = appKit.getAccount?.('eip155');
   if (existing?.isConnected && existing.address) {
-    account = existing.address;
+    emitAccount(existing.address);
     return account;
   }
-  // Open the AppKit modal and resolve when a connection lands (or modal closes).
   await appKit.open();
   return await new Promise((resolve) => {
     const unsubAcc = appKit.subscribeAccount((acc) => {
       if (acc?.isConnected && acc.address) {
-        account = acc.address;
+        emitAccount(acc.address);
         cleanup();
         resolve(account);
       }
@@ -223,6 +248,22 @@ export async function connectWallet() {
     });
     function cleanup() { unsubAcc?.(); unsubState?.(); }
   });
+}
+
+export async function connectWallet() {
+  // Desktop extension (MetaMask, Rabby, ...): connect to it directly —
+  // no modal, no WalletConnect round-trip.
+  if (window.ethereum) {
+    try {
+      return await connectInjected();
+    } catch (err) {
+      // User rejected → stop. Anything else → fall through to AppKit.
+      if (err?.code === 4001) return null;
+      console.warn('Injected connect failed, falling back to WalletConnect:', err);
+    }
+  }
+  // No extension (mobile browsers) → AppKit modal with WalletConnect QR/deep links.
+  return await connectViaAppKit();
 }
 
 export function getAccount() {
@@ -235,7 +276,7 @@ export async function switchChain(chainId) {
 
   // WalletConnect sessions switch through AppKit (which handles the
   // wallet-side approval); injected providers use raw EIP-3326.
-  if (activeProvider && activeProvider !== window.ethereum) {
+  if (!usingInjected && activeProvider) {
     const target = appKitNetworks.find((n) => n.id === chainId);
     if (target) { await appKit.switchNetwork(target); return; }
   }
@@ -267,6 +308,9 @@ export async function switchChain(chainId) {
 }
 
 export function getWalletChainId() {
+  if (usingInjected && window.ethereum?.chainId) {
+    return parseInt(window.ethereum.chainId, 16);
+  }
   const id = appKit.getChainId?.();
   if (id) return Number(id);
   const eth = provider();

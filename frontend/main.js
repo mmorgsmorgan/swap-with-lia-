@@ -18,6 +18,7 @@ import {
   wethBalanceWei,
   checkBridgeStatus,
   checkReturnStatus,
+  setAccountChangeHandler,
 } from './web3.js';
 import { runLia } from './ai.js';
 
@@ -562,20 +563,26 @@ function initWallet() {
     await executeSwapOrBridge();
   });
 
+  // Account changes (connect/disconnect/switch) arrive through AppKit,
+  // which covers injected AND WalletConnect sessions — including sessions
+  // restored on page load, so mobile users stay connected across visits.
+  setAccountChangeHandler((addr) => {
+    if (!addr) {
+      state.wallet = null;
+      const b = document.getElementById('connect-wallet');
+      b.classList.remove('connected');
+      b.querySelector('.btn-text').textContent = 'Connect Wallet';
+      updateSwapButton();
+    } else {
+      state.wallet = addr;
+      updateWalletUI();
+      loadAllBalances();
+      updateSwapButton();
+      renderHistory();
+    }
+  });
+
   if (window.ethereum) {
-    window.ethereum.on('accountsChanged', (accounts) => {
-      if (accounts.length === 0) {
-        state.wallet = null;
-        const b = document.getElementById('connect-wallet');
-        b.classList.remove('connected');
-        b.querySelector('.btn-text').textContent = 'Connect Wallet';
-        updateSwapButton();
-      } else {
-        state.wallet = accounts[0];
-        updateWalletUI();
-        loadAllBalances();
-      }
-    });
     window.ethereum.on('chainChanged', () => loadAllBalances());
   }
 }

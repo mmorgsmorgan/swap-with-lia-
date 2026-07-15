@@ -20,6 +20,8 @@ import {
   encodeAbiParameters,
   parseEventLogs,
 } from 'viem';
+import { createAppKit } from '@reown/appkit';
+import { defineChain as defineAppKitChain } from '@reown/appkit/networks';
 
 // ---- Chains (mirrors packages/config/src/chains.ts) ----
 export const ethereumSepolia = defineChain({
@@ -113,23 +115,114 @@ const publicClients = {
 let account = null;
 
 function walletClientFor(chainId) {
-  if (!window.ethereum) throw new Error('No wallet found. Install MetaMask.');
+  const eth = provider(); // injected OR WalletConnect — set by AppKit (hoisted from the Wallet section)
+  if (!eth) throw new Error('No wallet connected. Tap Connect Wallet first.');
   return createWalletClient({
     account,
     chain: CHAINS_BY_ID[chainId],
-    transport: custom(window.ethereum),
+    transport: custom(eth),
   });
 }
 
 // ---- Wallet ----
-export async function connectWallet() {
-  if (!window.ethereum) {
-    alert('Please install MetaMask or another Web3 wallet.');
-    return null;
+// Reown AppKit gives us WalletConnect (mobile deep links / QR) + injected +
+// Coinbase in one modal. Mobile browsers have no window.ethereum, so AppKit
+// is the only way phones can connect outside a wallet's in-app browser.
+const REOWN_PROJECT_ID = '0828f5f43e6eb42865065f029e7c8bbc';
+
+// AppKit wants its own network shape (CAIP fields) — mirror our viem chains.
+const appKitNetworks = [
+  defineAppKitChain({
+    id: 11155111,
+    caipNetworkId: 'eip155:11155111',
+    chainNamespace: 'eip155',
+    name: 'Ethereum Sepolia',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: ['https://ethereum-sepolia-rpc.publicnode.com'] } },
+    blockExplorers: { default: { name: 'Etherscan', url: 'https://sepolia.etherscan.io' } },
+    testnet: true,
+  }),
+  defineAppKitChain({
+    id: 84532,
+    caipNetworkId: 'eip155:84532',
+    chainNamespace: 'eip155',
+    name: 'Base Sepolia',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: ['https://sepolia.base.org'] } },
+    blockExplorers: { default: { name: 'BaseScan', url: 'https://sepolia.basescan.org' } },
+    testnet: true,
+  }),
+  defineAppKitChain({
+    id: 1979,
+    caipNetworkId: 'eip155:1979',
+    chainNamespace: 'eip155',
+    name: 'Ritual',
+    nativeCurrency: { name: 'RITUAL', symbol: 'RITUAL', decimals: 18 },
+    rpcUrls: { default: { http: ['https://rpc.ritualfoundation.org'] } },
+    blockExplorers: { default: { name: 'Ritual Explorer', url: 'https://explorer.ritual.foundation' } },
+    testnet: true,
+  }),
+];
+
+const appKit = createAppKit({
+  projectId: REOWN_PROJECT_ID,
+  networks: appKitNetworks,
+  metadata: {
+    name: 'Swap with Lia',
+    description: 'Cross-chain DEX powered by AI — ETH, WETH and RITUAL across Sepolia, Base Sepolia and Ritual.',
+    url: window.location.origin,
+    icons: [`${window.location.origin}/favicon.svg`],
+  },
+  themeMode: 'dark',
+  features: { analytics: false, email: false, socials: false },
+});
+
+// The active EIP-1193 provider — injected OR WalletConnect, whichever the user
+// picked in the AppKit modal. All wallet clients are built from this.
+let activeProvider = null;
+appKit.subscribeProviders((state) => {
+  activeProvider = state['eip155'] || null;
+});
+
+function provider() {
+  return activeProvider || window.ethereum || null;
+}
+
+let onAccountChange = null;
+export function setAccountChangeHandler(fn) {
+  onAccountChange = fn;
+}
+
+appKit.subscribeAccount((acc) => {
+  const next = acc?.isConnected ? (acc.address || null) : null;
+  if (next !== account) {
+    account = next;
+    onAccountChange?.(account);
   }
-  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-  account = accounts[0] || null;
-  return account;
+});
+
+export async function connectWallet() {
+  // Already connected (e.g. session restored from a previous visit)?
+  const existing = appKit.getAccount?.('eip155');
+  if (existing?.isConnected && existing.address) {
+    account = existing.address;
+    return account;
+  }
+  // Open the AppKit modal and resolve when a connection lands (or modal closes).
+  await appKit.open();
+  return await new Promise((resolve) => {
+    const unsubAcc = appKit.subscribeAccount((acc) => {
+      if (acc?.isConnected && acc.address) {
+        account = acc.address;
+        cleanup();
+        resolve(account);
+      }
+    });
+    const unsubState = appKit.subscribeState((s) => {
+      if (!s.open && !account) { cleanup(); resolve(null); }
+    });
+    function cleanup() { unsubAcc?.(); unsubState?.(); }
+  });
 }
 
 export function getAccount() {
@@ -139,15 +232,25 @@ export function getAccount() {
 export async function switchChain(chainId) {
   const chain = CHAINS_BY_ID[chainId];
   if (!chain) return;
+
+  // WalletConnect sessions switch through AppKit (which handles the
+  // wallet-side approval); injected providers use raw EIP-3326.
+  if (activeProvider && activeProvider !== window.ethereum) {
+    const target = appKitNetworks.find((n) => n.id === chainId);
+    if (target) { await appKit.switchNetwork(target); return; }
+  }
+
+  const eth = provider();
+  if (!eth) throw new Error('No wallet connected.');
   const hexId = '0x' + chainId.toString(16);
   try {
-    await window.ethereum.request({
+    await eth.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: hexId }],
     });
   } catch (err) {
     if (err.code === 4902) {
-      await window.ethereum.request({
+      await eth.request({
         method: 'wallet_addEthereumChain',
         params: [{
           chainId: hexId,
@@ -164,8 +267,11 @@ export async function switchChain(chainId) {
 }
 
 export function getWalletChainId() {
-  if (!window.ethereum) return null;
-  return parseInt(window.ethereum.chainId, 16);
+  const id = appKit.getChainId?.();
+  if (id) return Number(id);
+  const eth = provider();
+  if (!eth?.chainId) return null;
+  return parseInt(eth.chainId, 16);
 }
 
 // ---- Balances ----

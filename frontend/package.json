@@ -13,6 +13,7 @@
     "vite": "^8.1.1"
   },
   "dependencies": {
+    "@reown/appkit": "^1.8.22",
     "three": "^0.185.1",
     "viem": "^2.55.1"
   }

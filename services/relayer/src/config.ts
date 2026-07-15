@@ -35,7 +35,8 @@ export const config = {
   },
 
   health: {
-    port: parseInt(process.env.HEALTH_PORT || '3001'),
+    // Railway/Render inject PORT and probe it — prefer it over our own setting.
+    port: parseInt(process.env.PORT || process.env.HEALTH_PORT || '3001'),
   },
 
   db: {

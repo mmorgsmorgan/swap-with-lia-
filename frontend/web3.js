@@ -99,6 +99,10 @@ const BRIDGE_MINT_ABI = [
   { type: 'function', name: 'pendingReturns', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ name: 'user', type: 'address' }, { name: 'amount', type: 'uint256' }, { name: 'destinationChainId', type: 'uint256' }, { name: 'initiatedAt', type: 'uint256' }, { name: 'settled', type: 'bool' }] },
 ];
 
+const CROSS_CHAIN_SWAP_ABI = [
+  { type: 'function', name: 'processedSwaps', stateMutability: 'view', inputs: [{ type: 'bytes32' }], outputs: [{ type: 'bool' }] },
+];
+
 // ---- Clients ----
 const publicClients = {
   11155111: createPublicClient({ chain: ethereumSepolia, transport: http() }),
@@ -235,6 +239,9 @@ export async function getSwapQuote(amountIn, isWethToRitual) {
 }
 
 // ---- Approvals ----
+// Approve max once so subsequent swaps/burns are a single wallet transaction
+// instead of approve + action every time.
+const MAX_UINT256 = 2n ** 256n - 1n;
 async function ensureAllowance(token, owner, spender, amountWei) {
   const current = await publicClients[1979].readContract({
     address: token, abi: ERC20_ABI, functionName: 'allowance', args: [owner, spender],
@@ -242,7 +249,7 @@ async function ensureAllowance(token, owner, spender, amountWei) {
   if (current >= amountWei) return;
   const wallet = walletClientFor(1979);
   const hash = await wallet.writeContract({
-    address: token, abi: ERC20_ABI, functionName: 'approve', args: [spender, amountWei],
+    address: token, abi: ERC20_ABI, functionName: 'approve', args: [spender, MAX_UINT256],
   });
   await publicClients[1979].waitForTransactionReceipt({ hash });
 }
@@ -282,12 +289,23 @@ export async function bridgeLockETH(fromChainId, amount, recipient, directSwap) 
     ? CONTRACTS.baseSepolia.bridgeLock
     : CONTRACTS.ethereumSepolia.bridgeLock;
   const wallet = walletClientFor(fromChainId);
+  // Pre-estimate gas via our RPC — MetaMask's internal estimation sometimes
+  // returns null on testnets and crashes with "Cannot destructure 'gasLimit'".
+  const gas = await publicClients[fromChainId].estimateContractGas({
+    address: bridgeLock,
+    abi: BRIDGE_LOCK_ABI,
+    functionName: 'lockETH',
+    args: [1979n, recipient, !!directSwap],
+    value: amountWei,
+    account,
+  }).then((g) => (g * 12n) / 10n).catch(() => 150000n);
   return await wallet.writeContract({
     address: bridgeLock,
     abi: BRIDGE_LOCK_ABI,
     functionName: 'lockETH',
     args: [1979n, recipient, !!directSwap],
     value: amountWei,
+    gas,
   });
 }
 
@@ -380,19 +398,24 @@ const BURN_EVENT = [{
   ],
 }];
 
-// Forward bridge (lockETH tx on a source chain): completed once BridgeMint on
-// Ritual has processed keccak(sourceChainId, nonce).
+// Forward bridge (lockETH tx on a source chain): plain locks are processed by
+// BridgeMint (processedMints); directSwap locks are processed by CrossChainSwap
+// (processedSwaps) — BridgeMint never marks those, so check the right contract.
 export async function checkBridgeStatus(sourceChainId, lockTxHash) {
   const receipt = await publicClients[sourceChainId].getTransactionReceipt({ hash: lockTxHash }).catch(() => null);
   if (!receipt) return 'unknown';
   if (receipt.status !== 'success') return 'failed';
   const logs = parseEventLogs({ abi: LOCKED_EVENT, logs: receipt.logs });
   if (!logs.length) return 'unknown';
-  const nonce = logs[0].args.nonce;
+  const { nonce, directSwap } = logs[0].args;
   const key = keccak256(encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [BigInt(sourceChainId), nonce]));
-  const done = await publicClients[1979].readContract({
-    address: CONTRACTS.ritual.bridgeMint, abi: BRIDGE_MINT_ABI, functionName: 'processedMints', args: [key],
-  });
+  const done = directSwap
+    ? await publicClients[1979].readContract({
+        address: CONTRACTS.ritual.crossChainSwap, abi: CROSS_CHAIN_SWAP_ABI, functionName: 'processedSwaps', args: [key],
+      })
+    : await publicClients[1979].readContract({
+        address: CONTRACTS.ritual.bridgeMint, abi: BRIDGE_MINT_ABI, functionName: 'processedMints', args: [key],
+      });
   return done ? 'confirmed' : 'pending';
 }
 

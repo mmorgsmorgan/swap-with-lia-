@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "npm install && npm run build:config && npm run build:relayer"
+  },
+  "deploy": {
+    "startCommand": "node services/relayer/dist/index.js",
+    "restartPolicyType": "ALWAYS"
+  }
+}
